@@ -506,10 +506,10 @@ class HttpClientConnect extends HttpClient {
 					uri = baseUrl + uri;
 				}
 
-				this.toURI = uriEndpointFactory.createUriEndpoint(uri, configuration.websocketClientSpec != null);
+				this.fromURI = this.toURI = uriEndpointFactory.createUriEndpoint(uri, configuration.websocketClientSpec != null);
 			}
 			else {
-				this.toURI = uriEndpointFactory.createUriEndpoint(configuration.uri, configuration.websocketClientSpec != null);
+				this.fromURI = this.toURI = uriEndpointFactory.createUriEndpoint(configuration.uri, configuration.websocketClientSpec != null);
 			}
 			this.resourceUrl = toURI.toExternalForm();
 		}
@@ -644,7 +644,6 @@ class HttpClientConnect extends HttpClient {
 			else {
 				toURITemp = uriEndpointFactory.createUriEndpoint(from, to, () -> address);
 			}
-			fromURI = from;
 			toURI = toURITemp;
 			resourceUrl = toURITemp.toExternalForm();
 			this.redirectedFrom = addToRedirectedFromArray(redirectedFrom, from);
