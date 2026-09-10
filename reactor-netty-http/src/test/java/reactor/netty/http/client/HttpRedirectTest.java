@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2024 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2017-2025 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -195,6 +195,107 @@ class HttpRedirectTest extends BaseHttpTest {
 				          .block(Duration.ofSeconds(30));
 
 		assertThat(responseNanos).isGreaterThan(doOnResponseNanos.poll(5, TimeUnit.SECONDS));
+	}
+
+	@Test
+	void chainedRedirectDoesNotResendCredentialsToAnotherHost() {
+		final String credentials = "Bearer origin-secret";
+		AtomicReference<String> authAtOrigin = new AtomicReference<>();
+		AtomicReference<String> authAtOtherHostFirstHop = new AtomicReference<>();
+		AtomicReference<String> authAtOtherHostSecondHop = new AtomicReference<>();
+
+		DisposableServer otherHost = null;
+		DisposableServer originHost = null;
+		try {
+			otherHost =
+					createServer()
+					          .host("localhost")
+					          .route(r -> r.get("/hop2", (req, res) -> {
+					                               authAtOtherHostFirstHop.set(req.requestHeaders().get(HttpHeaderNames.AUTHORIZATION));
+					                               return res.status(302)
+					                                         .header(HttpHeaderNames.LOCATION, "/hop3")
+					                                         .send();
+					                           })
+					                       .get("/hop3", (req, res) -> {
+					                               authAtOtherHostSecondHop.set(req.requestHeaders().get(HttpHeaderNames.AUTHORIZATION));
+					                               return res.status(200)
+					                                         .sendString(Mono.just("OK"));
+					                           }))
+					          .bindNow();
+
+			final int otherPort = otherHost.port();
+
+			originHost =
+					createServer()
+					          .host("localhost")
+					          .route(r -> r.get("/start", (req, res) -> {
+					                               authAtOrigin.set(req.requestHeaders().get(HttpHeaderNames.AUTHORIZATION));
+					                               return res.status(302)
+					                                         .header(HttpHeaderNames.LOCATION,
+					                                                 "http://localhost:" + otherPort + "/hop2")
+					                                         .send();
+					                           }))
+					          .bindNow();
+
+			String response =
+					HttpClient.create()
+					          .wiretap(true)
+					          .followRedirect(true)
+					          .headers(h -> h.set(HttpHeaderNames.AUTHORIZATION, credentials))
+					          .get()
+					          .uri("http://localhost:" + originHost.port() + "/start")
+					          .responseContent()
+					          .aggregate()
+					          .asString()
+					          .block(Duration.ofSeconds(30));
+
+			assertThat(response).isEqualTo("OK");
+			assertThat(authAtOrigin.get()).isEqualTo(credentials);
+			assertThat(authAtOtherHostFirstHop.get()).isNull();
+			assertThat(authAtOtherHostSecondHop.get()).isNull();
+		}
+		finally {
+			if (originHost != null) {
+				originHost.disposeNow();
+			}
+			if (otherHost != null) {
+				otherHost.disposeNow();
+			}
+		}
+	}
+
+	@Test
+	void redirectWithinTheOriginHostStillSendsCredentials() {
+		final String credentials = "Bearer origin-secret";
+		AtomicReference<String> authAtSecondHop = new AtomicReference<>();
+
+		disposableServer =
+				createServer()
+				          .host("localhost")
+				          .route(r -> r.get("/start", (req, res) -> res.status(302)
+				                                                      .header(HttpHeaderNames.LOCATION, "/next")
+				                                                      .send())
+				                       .get("/next", (req, res) -> {
+				                               authAtSecondHop.set(req.requestHeaders().get(HttpHeaderNames.AUTHORIZATION));
+				                               return res.status(200)
+				                                         .sendString(Mono.just("OK"));
+				                           }))
+				          .bindNow();
+
+		String response =
+				HttpClient.create()
+				          .wiretap(true)
+				          .followRedirect(true)
+				          .headers(h -> h.set(HttpHeaderNames.AUTHORIZATION, credentials))
+				          .get()
+				          .uri("http://localhost:" + disposableServer.port() + "/start")
+				          .responseContent()
+				          .aggregate()
+				          .asString()
+				          .block(Duration.ofSeconds(30));
+
+		assertThat(response).isEqualTo("OK");
+		assertThat(authAtSecondHop.get()).isEqualTo(credentials);
 	}
 
 	@Test
