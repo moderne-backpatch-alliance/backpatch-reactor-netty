@@ -1,0 +1,17 @@
+schema: osera-patch-evidence/0.1.0
+producer: moderne
+release: 1.0.48.1-backpatch-00001
+baseline: v1.0.48+backpatch.baseline
+fixes:
+  - cve: CVE-2025-22227
+    upstream: https://nvd.nist.gov/vuln/detail/CVE-2025-22227
+    artifacts:
+      - io.projectreactor.netty:reactor-netty-http
+    note: New in this release; ported onto 1.0.48; fixed at 1.0.48.1-backpatch-00001 (backpatch-reactor-netty@fa4fd4a..e6c0969).
+tests:
+  commit: e6c09693a1a4f7441b0df0fa8ba3dcb1b38cc92b
+  command: ./gradlew --quiet --no-daemon -Dbackpatch.version=1.0.48.1-backpatch-00001 -Dbackpatch.repository.url=file:///tmp/osera-unused-repo -Dbackpatch.compile.jdk=8 -p reactor-netty-http test --rerun-tasks --tests reactor.netty.http.client.HttpRedirectTest
+  runtime: OpenJDK 1.8.0_372 (Zulu), Gradle wrapper of the repository
+  report: reactor-netty-http-1.0.48.1-backpatch-00001-tests.zip
+  result: pass
+  note: the regression tests the fix commits touched, 24 test(s) run, 0 failed, at the tested commit
