@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.net.ssl.SSLException;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -35,6 +36,9 @@ import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.cookie.DefaultCookie;
+import io.netty.handler.ssl.OptionalSslHandler;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
@@ -883,6 +887,50 @@ class HttpRedirectTest extends BaseHttpTest {
 		        .responseSingle((res, bytes) -> bytes.asString().zipWith(Mono.just(res.status().code())))
 		        .as(StepVerifier::create)
 		        .expectNextMatches(tuple -> "OK".equals(tuple.getT1()) && tuple.getT2() == 200)
+		        .expectComplete()
+		        .verify(Duration.ofSeconds(10));
+	}
+
+	/**
+	 * CVE-2026-41715: a redirect from https to http on the same host and port is the
+	 * same {@code UriEndpoint} by address, so the credential headers were kept and sent
+	 * over the plain connection. The server here answers TLS and plain HTTP on one port.
+	 */
+	@Test
+	void testRedirectFromHttpsToHttpOnSamePortDropsCredentials() throws SSLException {
+		SslContext serverSslContext = SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey()).build();
+		disposableServer =
+				createServer()
+				        .doOnChannelInit((observer, channel, address) ->
+				                channel.pipeline().addFirst(new OptionalSslHandler(serverSslContext)))
+				        .route(r -> r.get("/login", (req, res) ->
+				                             res.status(302)
+				                                .header(HttpHeaderNames.LOCATION,
+				                                        "http://" + req.requestHeaders().get(HttpHeaderNames.HOST) + "/landing")
+				                                .send())
+				                     .get("/landing", (req, res) ->
+				                             res.sendString(Mono.just(
+				                                     req.requestHeaders().get(HttpHeaderNames.AUTHORIZATION, "none") + "|" +
+				                                     req.requestHeaders().get(HttpHeaderNames.COOKIE, "none") + "|" +
+				                                     req.requestHeaders().get(HttpHeaderNames.PROXY_AUTHORIZATION, "none")))))
+				        .bindNow();
+
+		Http11SslContextSpec clientSslContext =
+				Http11SslContextSpec.forClient()
+				                    .configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
+		createClient(disposableServer.port())
+		        .secure(spec -> spec.sslContext(clientSslContext))
+		        .followRedirect(true)
+		        .headers(h -> h.set(HttpHeaderNames.AUTHORIZATION, "Bearer secret")
+		                       .set(HttpHeaderNames.COOKIE, "session=secret")
+		                       .set(HttpHeaderNames.PROXY_AUTHORIZATION, "Basic secret"))
+		        .get()
+		        .uri("https://localhost:" + disposableServer.port() + "/login")
+		        .responseContent()
+		        .aggregate()
+		        .asString()
+		        .as(StepVerifier::create)
+		        .expectNext("none|none|none")
 		        .expectComplete()
 		        .verify(Duration.ofSeconds(10));
 	}
