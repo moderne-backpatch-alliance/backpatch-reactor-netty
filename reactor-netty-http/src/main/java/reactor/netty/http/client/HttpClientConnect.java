@@ -565,15 +565,6 @@ class HttpClientConnect extends HttpClient {
 				}
 
 				ch.listener().onStateChange(ch, HttpClientState.REQUEST_PREPARED);
-				if (websocketClientSpec != null) {
-					Mono<Void> result =
-							Mono.fromRunnable(() -> ch.withWebsocketSupport(websocketClientSpec, compress));
-					if (handler != null) {
-						result = result.thenEmpty(Mono.fromRunnable(() -> Flux.concat(handler.apply(ch, ch))));
-					}
-					return result;
-				}
-
 				Consumer<HttpClientRequest> consumer = null;
 				if (fromURI != null && (!toURI.equals(fromURI) || (fromURI.isSecure() && !toURI.isSecure()))) {
 					if (handler instanceof RedirectSendHandler) {
@@ -601,6 +592,15 @@ class HttpClientConnect extends HttpClient {
 				}
 
 				ch.redirectRequestConsumer(consumer);
+
+				if (websocketClientSpec != null) {
+					Mono<Void> result =
+							Mono.fromRunnable(() -> ch.withWebsocketSupport(websocketClientSpec, compress));
+					if (handler != null) {
+						result = result.thenEmpty(Mono.fromRunnable(() -> Flux.concat(handler.apply(ch, ch))));
+					}
+					return result;
+				}
 				return handler != null ? handler.apply(ch, ch) : ch.send();
 			}
 			catch (Throwable t) {

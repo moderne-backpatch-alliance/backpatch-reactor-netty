@@ -934,4 +934,47 @@ class HttpRedirectTest extends BaseHttpTest {
 		        .expectComplete()
 		        .verify(Duration.ofSeconds(10));
 	}
+
+	/**
+	 * CVE-2026-41715 on the WebSocket path: a WebSocket client follows redirects too, and its
+	 * handshake left before the credential headers were removed, so a redirect from wss to ws
+	 * sent them over the plain connection.
+	 */
+	@Test
+	void testWebsocketRedirectFromWssToWsOnSamePortDropsCredentials() throws SSLException {
+		SslContext serverSslContext = SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey()).build();
+		disposableServer =
+				createServer()
+				        .doOnChannelInit((observer, channel, address) ->
+				                channel.pipeline().addFirst(new OptionalSslHandler(serverSslContext)))
+				        .route(r -> r.get("/login", (req, res) ->
+				                             res.status(302)
+				                                .header(HttpHeaderNames.LOCATION,
+				                                        "ws://" + req.requestHeaders().get(HttpHeaderNames.HOST) + "/landing")
+				                                .send())
+				                     .ws("/landing", (in, out) ->
+				                             out.sendString(Mono.just(
+				                                     in.headers().get(HttpHeaderNames.AUTHORIZATION, "none") + "|" +
+				                                     in.headers().get(HttpHeaderNames.COOKIE, "none") + "|" +
+				                                     in.headers().get(HttpHeaderNames.PROXY_AUTHORIZATION, "none")))))
+				        .bindNow();
+
+		Http11SslContextSpec clientSslContext =
+				Http11SslContextSpec.forClient()
+				                    .configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
+		createClient(disposableServer.port())
+		        .secure(spec -> spec.sslContext(clientSslContext))
+		        .followRedirect(true)
+		        .headers(h -> h.set(HttpHeaderNames.AUTHORIZATION, "Bearer secret")
+		                       .set(HttpHeaderNames.COOKIE, "session=secret")
+		                       .set(HttpHeaderNames.PROXY_AUTHORIZATION, "Basic secret"))
+		        .websocket()
+		        .uri("wss://localhost:" + disposableServer.port() + "/login")
+		        .handle((in, out) -> in.receive().aggregate().asString())
+		        .next()
+		        .as(StepVerifier::create)
+		        .expectNext("none|none|none")
+		        .expectComplete()
+		        .verify(Duration.ofSeconds(10));
+	}
 }
